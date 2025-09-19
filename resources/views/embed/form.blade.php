@@ -5,30 +5,117 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="frame-ancestors {{ $parentOrigin ?? '*' }}">
     <style>
-        /* Minimal reset - allow parent site to style */
+        /* CSS Variables that can be overridden via URL parameters */
+        :root {
+            --form-font-family: {{ $styles['font_family'] ?? 'inherit' }};
+            --form-bg-color: transparent;
+            --form-text-color: #333;
+
+            --input-padding: 10px;
+            --input-border-color: {{ $styles['input_border_color'] ?? '#ddd' }};
+            --input-border-radius: {{ $styles['border_radius'] ?? '4px' }};
+            --input-bg-color: #fff;
+            --input-focus-border: {{ $styles['primary_color'] ?? '#4CAF50' }};
+
+            --label-color: #555;
+            --label-font-size: 14px;
+            --label-font-weight: 500;
+
+            --button-bg: {{ $styles['button_color'] ?? $styles['primary_color'] ?? '#4CAF50' }};
+            --button-color: #fff;
+            --button-padding: 12px 24px;
+            --button-border-radius: {{ $styles['border_radius'] ?? '4px' }};
+            --button-hover-bg: {{ $styles['button_hover_color'] ?? '#45a049' }};
+
+            --error-color: #dc3545;
+            --success-color: #28a745;
+
+            --spacing-between-fields: {{ $styles['spacing'] ?? '16px' }};
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: inherit;
-            background: transparent;
+            font-family: var(--form-font-family);
+            background: var(--form-bg-color);
+            color: var(--form-text-color);
             padding: 0;
             margin: 0;
         }
-        /* Only essential structural styles */
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; }
+
+        .form-group {
+            margin-bottom: var(--spacing-between-fields);
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--label-color);
+            font-size: var(--label-font-size);
+            font-weight: var(--label-font-weight);
+        }
+
         .form-group input,
         .form-group textarea {
             width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            padding: var(--input-padding);
+            border: 1px solid var(--input-border-color);
+            border-radius: var(--input-border-radius);
+            background-color: var(--input-bg-color);
+            color: var(--form-text-color);
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
         }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--input-focus-border);
+            box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+        }
+
         .submit-btn {
-            padding: 10px 20px;
+            background: var(--button-bg);
+            color: var(--button-color);
+            padding: var(--button-padding);
+            border: none;
+            border-radius: var(--button-border-radius);
             cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            width: 100%;
         }
-        .error { color: #dc3545; font-size: 14px; margin-top: 5px; }
-        .success { color: #28a745; padding: 10px; }
+
+        .submit-btn:hover {
+            background: var(--button-hover-bg);
+        }
+
+        .submit-btn:active {
+            transform: scale(0.98);
+        }
+
+        .error {
+            color: var(--error-color);
+            font-size: 13px;
+            margin-top: 4px;
+            display: block;
+        }
+
+        .success {
+            color: var(--success-color);
+            padding: 12px;
+            background: rgba(40, 167, 69, 0.1);
+            border-radius: var(--input-border-radius);
+            margin-top: var(--spacing-between-fields);
+        }
+
+        /* Loading state */
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -59,7 +146,23 @@
 <script>
     (function() {
         const form = document.getElementById('embedForm');
+        const submitBtn = form.querySelector('.submit-btn');
         const parentOrigin = '{{ $parentOrigin ?? "*" }}';
+
+        // Listen for custom CSS injection from parent
+        window.addEventListener('message', function(event) {
+            // Security check - only accept from parent origin
+            if (parentOrigin !== '*' && event.origin !== parentOrigin) return;
+
+            if (event.data.type === 'injectCSS' && event.data.css) {
+                const style = document.createElement('style');
+                style.textContent = event.data.css;
+                document.head.appendChild(style);
+
+                // Trigger resize after style injection
+                setTimeout(updateHeight, 100);
+            }
+        });
 
         // Notify parent of height changes
         function updateHeight() {
@@ -71,7 +174,7 @@
         }
 
         // Initial height
-        updateHeight();
+        setTimeout(updateHeight, 100);
 
         // Watch for content changes
         const resizeObserver = new ResizeObserver(updateHeight);
@@ -82,9 +185,17 @@
 
             // Clear previous errors
             document.querySelectorAll('.error').forEach(el => el.textContent = '');
+            document.getElementById('formMessage').innerHTML = '';
+
+            // Disable submit button
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting...';
 
             const formData = new FormData(form);
             const data = Object.fromEntries(formData);
+
+            // Add form_id from data attribute
+            data.form_id = form.getAttribute('data-form-id');
 
             try {
                 const response = await fetch('{{ route("embed.form.submit") }}', {
@@ -121,12 +232,21 @@
                             }
                         });
                         updateHeight();
+                    } else {
+                        document.getElementById('formMessage').innerHTML =
+                            '<div class="error">' + (result.message || 'An error occurred.') + '</div>';
+                        updateHeight();
                     }
                 }
             } catch (error) {
+                console.error('Form submission error:', error);
                 document.getElementById('formMessage').innerHTML =
                     '<div class="error">An error occurred. Please try again.</div>';
                 updateHeight();
+            } finally {
+                // Re-enable submit button
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Submit';
             }
         });
     })();
